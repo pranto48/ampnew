@@ -23,6 +23,7 @@ import {
   UserCog, // Added for Users icon
   Tools, // Added for Maintenance icon
   PlusCircle, // Added for Create New Device button
+  AlertCircle, // Added for license limit warning
 } from "lucide-react";
 import PingTest from "@/components/PingTest";
 import NetworkStatus from "@/components/NetworkStatus";
@@ -38,7 +39,7 @@ import { useDashboardData } from "@/hooks/useDashboardData";
 import LicenseManager from "@/components/LicenseManager"; // Keep import for LicenseManager as it's used by LicenseDetailsPage
 import UserManagement from "@/components/UserManagement";
 import DockerUpdate from "@/components/DockerUpdate";
-import Products from "./Products";
+import ProductsPage from "./Products"; // Renamed to ProductsPage to avoid conflict with component
 import Maintenance from "./Maintenance";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card"; // Ensure Card components are imported
 import { Button } from "@/components/ui/button"; // Ensure Button is imported
@@ -287,15 +288,23 @@ const MainApp = () => {
                   <CardDescription>Monitor the status of devices on your local network</CardDescription>
                 </div>
                 {canManageDevices && (
-                  <Button 
-                    onClick={handleAddDeviceClick} 
-                    disabled={!licenseStatus.can_add_device}
-                    title={!licenseStatus.can_add_device ? licenseStatus.license_message : 'Add a new device to your inventory'}
-                    className="bg-primary hover:bg-primary/90 text-primary-foreground"
-                  >
-                    <PlusCircle className="mr-2 h-4 w-4" />
-                    Create New Device
-                  </Button>
+                  <div className="flex flex-col items-end gap-2">
+                    {!licenseStatus.can_add_device && (
+                      <Badge variant="destructive" className="text-xs">
+                        <AlertCircle className="h-3 w-3 mr-1" />
+                        {licenseStatus.license_message || 'Device limit reached.'}
+                      </Badge>
+                    )}
+                    <Button 
+                      onClick={handleAddDeviceClick} 
+                      disabled={!licenseStatus.can_add_device}
+                      title={!licenseStatus.can_add_device ? licenseStatus.license_message : 'Add a new device to your inventory'}
+                      className="bg-primary hover:bg-primary/90 text-primary-foreground"
+                    >
+                      <PlusCircle className="mr-2 h-4 w-4" />
+                      Create New Device
+                    </Button>
+                  </div>
                 )}
               </CardHeader>
               <CardContent>
@@ -420,7 +429,7 @@ const MainApp = () => {
           </TabsContent>
           
           <TabsContent value="products">
-            <Products />
+            <ProductsPage /> {/* Render the updated ProductsPage here */}
           </TabsContent>
 
           {isAdmin && (
