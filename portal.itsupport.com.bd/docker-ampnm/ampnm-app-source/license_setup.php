@@ -90,7 +90,10 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
         <div class="text-center mb-8">
             <i class="fas fa-shield-halved text-cyan-400 text-6xl"></i>
             <h1 class="text-3xl font-bold text-white mt-4">AMPNM License Setup</h1>
-            <p class="text-slate-400">Please enter your application license key to continue</p>
+            <p class="text-slate-400">
+                Welcome to AMPNM! To get started, please enter your application license key below.
+                If you don't have one, you can get a free demo license for testing purposes.
+            </p>
         </div>
         <form method="POST" action="license_setup.php" class="bg-slate-800/50 border border-slate-700 rounded-lg shadow-xl p-8 space-y-6">
             <div id="dynamic-message-container">
