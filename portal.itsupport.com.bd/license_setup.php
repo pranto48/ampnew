@@ -358,6 +358,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                     ['name' => 'AMPNM Advance License (30 Devices / 1 Year)', 'description' => 'Advance license for up to 30 devices, valid for 1 year.', 'price' => 10.00, 'max_devices' => 30, 'license_duration_days' => 365, 'category' => 'AMPNM'],
                     ['name' => 'AMPNM Premium License (50 Devices / 1 Year)', 'description' => 'Premium license for up to 50 devices, valid for 1 year.', 'price' => 50.00, 'max_devices' => 50, 'license_duration_days' => 365, 'category' => 'AMPNM'],
                     ['name' => 'AMPNM Ultimate License (Unlimited Devices / 1 Year)', 'description' => 'Ultimate license for unlimited devices, valid for 1 year.', 'price' => 100.00, 'max_devices' => 99999, 'license_duration_days' => 365, 'category' => 'AMPNM'],
+                    // NEW: Demo License Product
+                    ['name' => 'AMPNM Demo License (5 Devices / 7 Days)', 'description' => 'A free, limited-time demo license for AMPNM.', 'price' => 0.00, 'max_devices' => 5, 'license_duration_days' => 7, 'category' => 'AMPNM'],
                 ];
 
                 foreach ($sample_products as $product_data) {

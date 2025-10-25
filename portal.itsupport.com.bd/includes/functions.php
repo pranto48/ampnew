@@ -33,6 +33,31 @@ function generateLicenseKey($prefix = 'AMPNM') {
     return strtoupper($prefix . '-' . $uuid);
 }
 
+// NEW: Function to create a demo license
+function createDemoLicense() {
+    $pdo = getLicenseDbConnection();
+    
+    // Find the "AMPNM Demo License" product
+    $stmt = $pdo->prepare("SELECT id, max_devices, license_duration_days FROM `products` WHERE name = 'AMPNM Demo License (5 Devices / 7 Days)'");
+    $stmt->execute();
+    $demo_product = $stmt->fetch(PDO::FETCH_ASSOC);
+
+    if (!$demo_product) {
+        error_log("ERROR: Demo product 'AMPNM Demo License (5 Devices / 7 Days)' not found.");
+        return false;
+    }
+
+    $license_key = generateLicenseKey();
+    $expires_at = date('Y-m-d H:i:s', strtotime("+" . $demo_product['license_duration_days'] . " days"));
+    
+    // Insert the license with NULL customer_id as it's a generic demo
+    $stmt = $pdo->prepare("INSERT INTO `licenses` (customer_id, product_id, license_key, status, max_devices, expires_at) VALUES (NULL, ?, ?, 'free', ?, ?)");
+    $stmt->execute([$demo_product['id'], $license_key, $demo_product['max_devices'], $expires_at]);
+
+    return $license_key;
+}
+
+
 // --- Customer Authentication Functions ---
 function authenticateCustomer($email, $password) {
     $pdo = getLicenseDbConnection();

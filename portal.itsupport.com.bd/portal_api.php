@@ -1,19 +1,20 @@
 <?php
 require_once 'includes/functions.php';
 
-// Ensure customer is logged in for all API actions
-if (!isCustomerLoggedIn()) {
+header('Content-Type: application/json');
+
+$pdo = getLicenseDbConnection();
+$action = $_GET['action'] ?? '';
+$input = json_decode(file_get_contents('php://input'), true) ?? [];
+
+// Allow 'get_demo_license' action without customer login
+if ($action !== 'get_demo_license' && !isCustomerLoggedIn()) {
     http_response_code(403);
     echo json_encode(['error' => 'Unauthorized access.']);
     exit;
 }
 
-header('Content-Type: application/json');
-
-$pdo = getLicenseDbConnection();
-$customer_id = $_SESSION['customer_id'];
-$action = $_GET['action'] ?? '';
-$input = json_decode(file_get_contents('php://input'), true) ?? [];
+$customer_id = $_SESSION['customer_id'] ?? null; // customer_id might be null for demo license
 
 switch ($action) {
     case 'get_profile':
@@ -51,6 +52,22 @@ switch ($action) {
         $stmt = $pdo->query("SELECT id, name, description, price, max_devices, license_duration_days FROM `products` ORDER BY price ASC");
         $products = $stmt->fetchAll(PDO::FETCH_ASSOC);
         echo json_encode(['success' => true, 'products' => $products]);
+        break;
+
+    case 'get_demo_license': // NEW ACTION for demo license
+        try {
+            $license_key = createDemoLicense();
+            if ($license_key) {
+                echo json_encode(['success' => true, 'license_key' => $license_key, 'message' => 'Demo license generated successfully. It is valid for 7 days and 5 devices.']);
+            } else {
+                http_response_code(500);
+                echo json_encode(['success' => false, 'error' => 'Failed to generate demo license. Product not found or database error.']);
+            }
+        } catch (Exception $e) {
+            error_log("Error generating demo license: " . $e->getMessage());
+            http_response_code(500);
+            echo json_encode(['success' => false, 'error' => 'An internal error occurred while generating demo license.']);
+        }
         break;
 
     default:

@@ -93,7 +93,9 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             <p class="text-slate-400">Please enter your application license key to continue</p>
         </div>
         <form method="POST" action="license_setup.php" class="bg-slate-800/50 border border-slate-700 rounded-lg shadow-xl p-8 space-y-6">
-            <?= $message ?>
+            <div id="dynamic-message-container">
+                <?= $message ?>
+            </div>
             <div>
                 <label for="license_key" class="block text-sm font-medium text-slate-300 mb-2">License Key</label>
                 <input type="text" name="license_key" id="license_key" required
@@ -104,7 +106,42 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                     class="w-full px-6 py-3 bg-cyan-600 text-white font-semibold rounded-lg hover:bg-cyan-700 focus:ring-2 focus:ring-cyan-500 focus:outline-none">
                 Activate License
             </button>
+            <div class="text-center mt-4">
+                <button type="button" id="getDemoLicenseBtn" class="px-6 py-3 bg-slate-700 text-slate-300 font-semibold rounded-lg hover:bg-slate-600 focus:ring-2 focus:ring-slate-500 focus:outline-none">
+                    <i class="fas fa-flask mr-2"></i>Get a Demo License
+                </button>
+            </div>
         </form>
     </div>
+
+    <script>
+        document.getElementById('getDemoLicenseBtn').addEventListener('click', async () => {
+            const btn = document.getElementById('getDemoLicenseBtn');
+            const licenseKeyInput = document.getElementById('license_key');
+            const messageContainer = document.getElementById('dynamic-message-container');
+
+            btn.disabled = true;
+            btn.innerHTML = '<i class="fas fa-spinner fa-spin mr-2"></i>Getting Demo Key...';
+            messageContainer.innerHTML = ''; // Clear previous messages
+
+            try {
+                const response = await fetch('https://portal.itsupport.com.bd/portal_api.php?action=get_demo_license');
+                const data = await response.json();
+
+                if (data.success) {
+                    licenseKeyInput.value = data.license_key;
+                    messageContainer.innerHTML = `<div class="bg-green-500/20 border border-green-500/30 text-green-300 text-sm rounded-lg p-3 text-center">${data.message}</div>`;
+                } else {
+                    messageContainer.innerHTML = `<div class="bg-red-500/20 border border-red-500/30 text-red-300 text-sm rounded-lg p-3 text-center">${data.error || 'Failed to get demo license.'}</div>`;
+                }
+            } catch (error) {
+                console.error('Error fetching demo license:', error);
+                messageContainer.innerHTML = `<div class="bg-red-500/20 border border-red-500/30 text-red-300 text-sm rounded-lg p-3 text-center">Network error or server unreachable.</div>`;
+            } finally {
+                btn.disabled = false;
+                btn.innerHTML = '<i class="fas fa-flask mr-2"></i>Get a Demo License';
+            }
+        });
+    </script>
 </body>
 </html>
