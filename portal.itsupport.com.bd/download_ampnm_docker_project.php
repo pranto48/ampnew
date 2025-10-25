@@ -19,6 +19,7 @@ if (!$license_key) {
 // Define the base directory for the Docker project files
 $docker_project_base_dir = __DIR__ . '/docker-ampnm/';
 $app_source_dir = $docker_project_base_dir . 'ampnm-app-source/';
+$apache_conf_dir = $docker_project_base_dir . 'apache-conf/'; // NEW: Apache config directory
 
 // Ensure the app source directory exists
 if (!is_dir($app_source_dir)) {
@@ -78,6 +79,13 @@ try {
 
     // Add the entire ampnm-app-source directory recursively
     addFolderToZip($zip, $app_source_dir, $zip_root_folder . 'ampnm-app-source');
+
+    // NEW: Add the apache-conf directory recursively
+    if (is_dir($apache_conf_dir)) {
+        addFolderToZip($zip, $apache_conf_dir, $zip_root_folder . 'apache-conf');
+    } else {
+        error_log("Warning: apache-conf directory not found at " . $apache_conf_dir);
+    }
 
     // Add the .gitkeep file if it exists
     $gitkeep_path = $docker_project_base_dir . '.gitkeep';

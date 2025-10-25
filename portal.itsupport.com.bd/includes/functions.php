@@ -216,7 +216,18 @@ function addFolderToZip(ZipArchive $zip, string $folderPath, string $zipPath) {
 // --- Functions to generate Docker setup file contents ---
 function getDockerfileContent() {
     $dockerfile_lines = [
+        "# Stage 1: Build React app",
+        "FROM node:20-alpine as react_builder",
+        "WORKDIR /app",
+        "COPY ampnm-app-source/package.json ampnm-app-source/package-lock.json ./ampnm-app-source/",
+        "RUN npm install --prefix ampnm-app-source",
+        "COPY ampnm-app-source/ ./ampnm-app-source/",
+        "WORKDIR /app/ampnm-app-source",
+        "RUN npm run build",
+        "",
+        "# Stage 2: Setup PHP and Apache",
         "FROM php:8.2-apache",
+        "WORKDIR /var/www/html",
         "",
         "# Install system dependencies",
         "RUN apt-get update && apt-get install -y \\",
@@ -230,7 +241,7 @@ function getDockerfileContent() {
         "    libonig-dev \\",
         "    libxml2-dev \\",
         "    nmap \\", 
-        "    mariadb-client-compat \\", # Changed from mysql-client to mariadb-client-compat
+        "    mariadb-client-compat \\",
         "    && rm -rf /var/lib/apt/lists/*",
         "",
         "# Install PHP extensions",
@@ -240,31 +251,58 @@ function getDockerfileContent() {
         "# Enable Apache modules",
         "RUN a2enmod rewrite",
         "",
-        "# Copy application files from the ampnm-app-source directory",
-        "COPY ampnm-app-source/ /var/www/html/",
+        "# Copy built React app from react_builder stage to web root",
+        "COPY --from=react_builder /app/ampnm-app-source/dist/ ./",
+        "",
+        "# Copy PHP backend files and other static assets (excluding React source)",
+        "COPY ampnm-app-source/api.php ./api.php",
+        "COPY ampnm-app-source/config.php ./config.php",
+        "COPY ampnm-app-source/database_setup.php ./database_setup.php",
+        "COPY ampnm-app-source/dashboard.php ./dashboard.php",
+        "COPY ampnm-app-source/devices.php ./devices.php",
+        "COPY ampnm-app-source/email_notifications.php ./email_notifications.php",
+        "COPY ampnm-app-source/export.php ./export.php",
+        "COPY ampnm-app-source/footer.php ./footer.php",
+        "COPY ampnm-app-source/header.php ./header.php",
+        "COPY ampnm-app-source/index.php ./index.php",
+        "COPY ampnm-app-source/license.php ./license.php",
+        "COPY ampnm-app-source/license_expired.php ./license_expired.php",
+        "COPY ampnm-app-source/license_setup.php ./license_setup.php",
+        "COPY ampnm-app-source/login.php ./login.php",
+        "COPY ampnm-app-source/logout.php ./logout.php",
+        "COPY ampnm-app-source/maintenance.php ./maintenance.php",
+        "COPY ampnm-app-source/network_scanner.php ./network_scanner.php",
+        "COPY ampnm-app-source/network_status.php ./network_status.php",
+        "COPY ampnm-app-source/phpinfo.php ./phpinfo.php",
+        "COPY ampnm-app-source/ping.php ./ping.php",
+        "COPY ampnm-app-source/ping_history.php ./ping_history.php",
+        "COPY ampnm-app-source/products.php ./products.php",
+        "COPY ampnm-app-source/server_ping.php ./server_ping.php",
+        "COPY ampnm-app-source/users.php ./users.php",
+        "COPY ampnm-app-source/includes/ ./includes/",
+        "COPY ampnm-app-source/assets/ ./assets/",
+        "COPY ampnm-app-source/public/ ./public/", # Copy public assets like favicon
+        "",
+        "# Ensure the uploads directory exists and has correct permissions",
+        "RUN mkdir -p uploads/icons \\",
+        "    mkdir -p uploads/map_backgrounds \\",
+        "    mkdir -p uploads/backups \\",
+        "    && chown -R www-data:www-data uploads \\",
+        "    && chmod -R 775 uploads",
+        "",
+        "# Copy custom Apache configuration",
+        "COPY apache-conf/000-default.conf /etc/apache2/sites-available/000-default.conf",
+        "RUN a2dissite 000-default && a2ensite 000-default.conf",
         "",
         "# Copy the entrypoint script from the build context root",
         "COPY docker-entrypoint.sh /usr/local/bin/docker-entrypoint.sh",
         "RUN chmod +x /usr/local/bin/docker-entrypoint.sh",
         "",
-        "# Set permissions",
-        "RUN chown -R www-data:www-data /var/www/html \\",
-        "    && chmod -R 755 /var/www/html",
-        "",
-        "# Expose port 2266 (or whatever port your app runs on)",
+        "# Expose port 2266",
         "EXPOSE 2266",
         "",
-        "# Update Apache configuration to listen on 2266",
-        "RUN echo \"Listen 2266\" >> /etc/apache2/ports.conf \\",
-        "    && sed -i -e 's/VirtualHost \\*:80/VirtualHost \\*:2266/g' /etc/apache2/sites-available/000-default.conf \\",
-        "    && sed -i -e 's/VirtualHost \\*:80/VirtualHost \\*:2266/g' /etc/apache2/sites-enabled/000-default.conf",
-        "",
-        "# Ensure the uploads directory exists and has correct permissions",
-        "RUN mkdir -p /var/www/html/uploads/icons \\",
-        "    mkdir -p /var/www/html/uploads/map_backgrounds \\",
-        "    mkdir -p /var/www/html/uploads/backups \\", # Added backups directory
-        "    && chown -R www-data:www-data /var/www/html/uploads \\",
-        "    && chmod -R 775 /var/www/html/uploads",
+        "# Set permissions for web root",
+        "RUN chown -R www-data:www-data /var/www/html",
         "",
         "# Use the copied entrypoint script",
         "ENTRYPOINT [\"/usr/local/bin/docker-entrypoint.sh\"]"
@@ -285,21 +323,21 @@ services:
     build:
       context: . # Build context is the docker-ampnm folder
       dockerfile: Dockerfile
-    # The entrypoint is now handled by the Dockerfile itself
+    # No volume mount for ampnm-app-source, as it's built into the image
     volumes:
-      - ./ampnm-app-source/:/var/www/html/ # Mount the application source into the container
+      - ./php.ini:/usr/local/etc/php/conf.d/custom.ini # Mount custom php.ini for debugging
     depends_on:
       db:
         condition: service_healthy
     environment:
-      - DB_HOST=db # Changed from 127.0.0.1 to 'db' (the service name)
+      - DB_HOST=db
       - DB_NAME=network_monitor
       - DB_USER=user
       - DB_PASSWORD=password
       - MYSQL_ROOT_PASSWORD=rootpassword
       - ADMIN_PASSWORD=password
       - LICENSE_API_URL={$license_api_url}
-      - APP_LICENSE_KEY={$license_key}
+      # APP_LICENSE_KEY is no longer set here. It is configured via the web UI after initial setup.
     ports:
       - "2266:2266" # Main app will now run on port 2266
     restart: unless-stopped
@@ -318,7 +356,7 @@ services:
       - "3306:3306"
     restart: unless-stopped
     healthcheck:
-      test: ["CMD-SHELL", "mysqladmin ping -h localhost -u root -p\$$MYSQL_ROOT_PASSWORD"] # Corrected to single $
+      test: ["CMD-SHELL", "mysqladmin ping -h localhost -u root -p\$$MYSQL_ROOT_PASSWORD"]
       interval: 10s
       timeout: 5s
       retries: 10
