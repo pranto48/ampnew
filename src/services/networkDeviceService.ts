@@ -145,6 +145,13 @@ export const getLicenseStatus = async (): Promise<LicenseStatus> => {
   throw new Error(data.error || "Failed to retrieve license status.");
 };
 
+export const setAppLicenseKey = async (licenseKey: string): Promise<void> => {
+  const data = await callApi('set_app_license_key', 'POST', undefined, { license_key: licenseKey });
+  if (!data.success) {
+    throw new Error(data.error || "Failed to set application license key.");
+  }
+};
+
 // --- User Info Functions ---
 export const getUserInfo = async (): Promise<User> => {
   const data = await callApi('get_user_info', 'GET');
@@ -152,4 +159,45 @@ export const getUserInfo = async (): Promise<User> => {
     return data.user as User;
   }
   throw new Error(data.error || "Failed to retrieve user information.");
+};
+
+// --- User Management Functions (NEW) ---
+export const getUsers = async (): Promise<User[]> => {
+  const data = await callApi('get_users', 'GET');
+  if (data.success && Array.isArray(data.users)) {
+    return data.users.map((u: any) => ({
+      ...u,
+      id: String(u.id),
+    })) as User[];
+  }
+  throw new Error(data.error || "Failed to retrieve users.");
+};
+
+export const addUser = async (username: string, email: string, password: string, role: User['role']): Promise<User> => {
+  const data = await callApi('add_user', 'POST', undefined, { username, email, password, role });
+  if (data.success && data.user) {
+    return {
+      ...data.user,
+      id: String(data.user.id),
+    } as User;
+  }
+  throw new Error(data.error || "Failed to add user.");
+};
+
+export const updateUserRole = async (id: string, role: User['role']): Promise<User> => {
+  const data = await callApi('update_user_role', 'POST', undefined, { id, role });
+  if (data.success && data.user) {
+    return {
+      ...data.user,
+      id: String(data.user.id),
+    } as User;
+  }
+  throw new Error(data.error || "Failed to update user role.");
+};
+
+export const deleteUser = async (id: string): Promise<void> => {
+  const data = await callApi('delete_user', 'POST', undefined, { id });
+  if (!data.success) {
+    throw new Error(data.error || "Failed to delete user.");
+  }
 };

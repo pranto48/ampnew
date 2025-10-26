@@ -8,19 +8,90 @@ $action = $_GET['action'] ?? '';
 $input = json_decode(file_get_contents('php://input'), true) ?? [];
 
 // Ensure user is logged in for most actions
-if (!isUserLoggedIn() && $action !== 'login' && $action !== 'register' && $action !== 'get_license_status') {
+// 'set_app_license_key' is allowed without user login for initial setup
+if (!isUserLoggedIn() && $action !== 'login' && $action !== 'register' && $action !== 'get_license_status' && $action !== 'set_app_license_key') {
     http_response_code(403);
     echo json_encode(['error' => 'Unauthorized access.']);
     exit;
 }
 
 $user_id = $_SESSION['user_id'] ?? null; // Get logged-in user ID
+$user_role = $_SESSION['user_role'] ?? 'guest'; // Get logged-in user role
+
+// Admin-only actions
+$admin_actions = ['get_users', 'add_user', 'update_user_role', 'delete_user'];
+if (in_array($action, $admin_actions) && $user_role !== 'admin') {
+    http_response_code(403);
+    echo json_encode(['success' => false, 'error' => 'Admin privileges required for this action.']);
+    exit;
+}
 
 switch ($action) {
     case 'get_license_status':
         // This action is allowed without user login, but requires app license key
         $license_status = getAppLicenseStatus();
         echo json_encode(['success' => true, 'license_status' => $license_status]);
+        break;
+
+    case 'set_app_license_key':
+        if ($_SERVER['REQUEST_METHOD'] === 'POST') {
+            $license_key = trim($input['license_key'] ?? '');
+            if (empty($license_key)) {
+                http_response_code(400);
+                echo json_encode(['success' => false, 'error' => 'License key is required.']);
+                exit;
+            }
+
+            // Before saving, verify the key with the external portal
+            $installation_id = getInstallationId();
+            if (empty($installation_id)) {
+                http_response_code(500);
+                echo json_encode(['success' => false, 'error' => 'Application installation ID missing.']);
+                exit;
+            }
+
+            $ch = curl_init(LICENSE_API_URL);
+            $post_fields = json_encode([
+                'app_license_key' => $license_key,
+                'user_id' => 'api_call', // A dummy user ID for API validation
+                'current_device_count' => 0, // No devices yet for this check
+                'installation_id' => $installation_id,
+            ]);
+
+            curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
+            curl_setopt($ch, CURLOPT_POST, true);
+            curl_setopt($ch, CURLOPT_POSTFIELDS, $post_fields);
+            curl_setopt($ch, CURLOPT_HTTPHEADER, ['Content-Type: application/json']);
+            curl_setopt($ch, CURLOPT_TIMEOUT, 10);
+
+            $response = curl_exec($ch);
+            $httpCode = curl_getinfo($ch, CURLINFO_HTTP_CODE);
+            $curlError = curl_error($ch);
+            curl_close($ch);
+
+            if ($response === false || $httpCode !== 200) {
+                error_log("License API cURL Error during set_app_license_key: " . $curlError . " HTTP: " . $httpCode . " Response: " . $response);
+                http_response_code(500);
+                echo json_encode(['success' => false, 'error' => 'Failed to verify license with external portal.']);
+                exit;
+            }
+
+            $licenseData = json_decode($response, true);
+            if (json_last_error() !== JSON_ERROR_NONE || !isset($licenseData['success']) || $licenseData['success'] !== true) {
+                error_log("License API JSON Parse Error or invalid response during set_app_license_key: " . json_last_error_msg() . " Response: " . $response);
+                http_response_code(400);
+                echo json_encode(['success' => false, 'error' => $licenseData['message'] ?? 'Invalid license key provided.']);
+                exit;
+            }
+
+            // If verification is successful, save the key
+            if (setAppLicenseKey($license_key)) {
+                echo json_encode(['success' => true, 'message' => 'License key set successfully.']);
+            } else {
+                http_response_code(500);
+                echo json_encode(['success' => false, 'error' => 'Failed to save license key to database.']);
+            }
+        }
         break;
 
     case 'get_user_info':
@@ -154,6 +225,85 @@ switch ($action) {
             } else {
                 http_response_code(500);
                 echo json_encode(['success' => false, 'error' => 'Failed to update map.']);
+            }
+        }
+        break;
+
+    // --- User Management (NEW) ---
+    case 'get_users':
+        $users = getAllUsers();
+        echo json_encode(['success' => true, 'users' => $users]);
+        break;
+
+    case 'add_user':
+        if ($_SERVER['REQUEST_METHOD'] === 'POST') {
+            $username = trim($input['username'] ?? '');
+            $email = trim($input['email'] ?? '');
+            $password = $input['password'] ?? '';
+            $role = $input['role'] ?? 'read_user';
+
+            if (empty($username) || empty($email) || empty($password)) {
+                http_response_code(400);
+                echo json_encode(['success' => false, 'error' => 'Username, email, and password are required.']);
+                exit;
+            }
+            if (!filter_var($email, FILTER_VALIDATE_EMAIL)) {
+                http_response_code(400);
+                echo json_encode(['success' => false, 'error' => 'Invalid email format.']);
+                exit;
+            }
+            if (strlen($password) < 6) {
+                http_response_code(400);
+                echo json_encode(['success' => false, 'error' => 'Password must be at least 6 characters long.']);
+                exit;
+            }
+
+            $user_id = addUser($username, $email, $password, $role);
+            if ($user_id) {
+                $new_user = getUserById($user_id);
+                echo json_encode(['success' => true, 'message' => 'User added successfully.', 'user' => $new_user]);
+            } else {
+                http_response_code(500);
+                echo json_encode(['success' => false, 'error' => 'Failed to add user. User with this email or username might already exist.']);
+            }
+        }
+        break;
+
+    case 'update_user_role':
+        if ($_SERVER['REQUEST_METHOD'] === 'POST') {
+            $id = trim($input['id'] ?? '');
+            $role = $input['role'] ?? 'read_user';
+
+            if (empty($id) || !in_array($role, ['admin', 'network_manager', 'read_user'])) {
+                http_response_code(400);
+                echo json_encode(['success' => false, 'error' => 'User ID and a valid role are required.']);
+                exit;
+            }
+
+            if (updateUserRole($id, $role)) {
+                $updated_user = getUserById($id);
+                echo json_encode(['success' => true, 'message' => 'User role updated successfully.', 'user' => $updated_user]);
+            } else {
+                http_response_code(500);
+                echo json_encode(['success' => false, 'error' => 'Failed to update user role.']);
+            }
+        }
+        break;
+
+    case 'delete_user':
+        if ($_SERVER['REQUEST_METHOD'] === 'POST') {
+            $id = trim($input['id'] ?? '');
+            if (empty($id)) {
+                http_response_code(400);
+                echo json_encode(['success' => false, 'error' => 'User ID is required.']);
+                exit;
+            }
+
+            if (deleteUser($id)) {
+                echo json_encode(['success' => true, 'message' => 'User deleted successfully.']);
+            } else {
+                http_response_code(500);
+                echo json_encode(['success' => false, 'error' => 'Failed to delete user.']);
             }
         }
         break;

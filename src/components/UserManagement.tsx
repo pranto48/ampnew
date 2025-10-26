@@ -1,59 +1,77 @@
 "use client";
 
-import React from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import { Card, CardHeader, CardTitle, CardDescription, CardContent } from "@/components/ui/card";
-import { Users, UserPlus, UserCog, Trash2 } from "lucide-react";
+import { Users, UserPlus, UserCog, Trash2, RefreshCw, Loader2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { showSuccess, showError } from "@/utils/toast";
 import { Skeleton } from "@/components/ui/skeleton";
-
-interface User {
-  id: string;
-  username: string;
-  email: string;
-  role: 'admin' | 'network_manager' | 'read_user';
-}
+import { User, getUsers, addUser, updateUserRole, deleteUser } from "@/services/networkDeviceService";
 
 const UserManagement = () => {
-  const [users, setUsers] = React.useState<User[]>([]);
-  const [isLoading, setIsLoading] = React.useState(true);
-  const [newUser, setNewUser] = React.useState({ username: '', email: '', password: '', role: 'read_user' as User['role'] });
+  const [users, setUsers] = useState<User[]>([]);
+  const [isLoading, setIsLoading] = useState(true);
+  const [isAddingUser, setIsAddingUser] = useState(false);
+  const [newUser, setNewUser] = useState({ username: '', email: '', password: '', role: 'read_user' as User['role'] });
 
-  React.useEffect(() => {
-    // Simulate fetching users
-    const fetchUsers = setTimeout(() => {
-      setUsers([
-        { id: '1', username: 'admin', email: 'admin@example.com', role: 'admin' },
-        { id: '2', username: 'john.doe', email: 'john.doe@example.com', role: 'network_manager' },
-        { id: '3', username: 'jane.smith', email: 'jane.smith@example.com', role: 'read_user' },
-      ]);
+  const fetchUsers = useCallback(async () => {
+    setIsLoading(true);
+    try {
+      const fetchedUsers = await getUsers();
+      setUsers(fetchedUsers);
+      showSuccess("Users loaded successfully.");
+    } catch (error: any) {
+      showError(error.message || "Failed to load users.");
+    } finally {
       setIsLoading(false);
-    }, 1500);
-    return () => clearTimeout(fetchUsers);
+    }
   }, []);
 
-  const handleAddUser = () => {
+  useEffect(() => {
+    fetchUsers();
+  }, [fetchUsers]);
+
+  const handleAddUser = async () => {
     if (!newUser.username || !newUser.email || !newUser.password) {
       showError("Username, email, and password are required.");
       return;
     }
-    // Simulate API call
-    const newId = String(users.length + 1);
-    setUsers([...users, { ...newUser, id: newId }]);
-    showSuccess(`User '${newUser.username}' added.`);
-    setNewUser({ username: '', email: '', password: '', role: 'read_user' });
+    setIsAddingUser(true);
+    try {
+      await addUser(newUser.username, newUser.email, newUser.password, newUser.role);
+      showSuccess(`User '${newUser.username}' added.`);
+      setNewUser({ username: '', email: '', password: '', role: 'read_user' });
+      fetchUsers(); // Refresh the user list
+    } catch (error: any) {
+      showError(error.message || "Failed to add user.");
+    } finally {
+      setIsAddingUser(false);
+    }
   };
 
-  const handleUpdateRole = (id: string, newRole: User['role']) => {
-    setUsers(users.map(user => user.id === id ? { ...user, role: newRole } : user));
-    showSuccess(`User role updated.`);
+  const handleUpdateRole = async (id: string, newRole: User['role']) => {
+    try {
+      await updateUserRole(id, newRole);
+      showSuccess(`User role updated.`);
+      fetchUsers(); // Refresh the user list
+    } catch (error: any) {
+      showError(error.message || "Failed to update user role.");
+    }
   };
 
-  const handleDeleteUser = (id: string) => {
-    setUsers(users.filter(user => user.id !== id));
-    showSuccess(`User deleted.`);
+  const handleDeleteUser = async (id: string) => {
+    if (!window.confirm("Are you sure you want to delete this user? This action cannot be undone.")) {
+      return;
+    }
+    try {
+      await deleteUser(id);
+      showSuccess(`User deleted.`);
+      fetchUsers(); // Refresh the user list
+    } catch (error: any) {
+      showError(error.message || "Failed to delete user.");
+    }
   };
 
   return (
@@ -77,6 +95,7 @@ const UserManagement = () => {
                 value={newUser.username}
                 onChange={(e) => setNewUser({ ...newUser, username: e.target.value })}
                 className="bg-background text-foreground border-border"
+                disabled={isAddingUser}
               />
               <Input
                 type="email"
@@ -84,6 +103,7 @@ const UserManagement = () => {
                 value={newUser.email}
                 onChange={(e) => setNewUser({ ...newUser, email: e.target.value })}
                 className="bg-background text-foreground border-border"
+                disabled={isAddingUser}
               />
               <Input
                 type="password"
@@ -91,8 +111,9 @@ const UserManagement = () => {
                 value={newUser.password}
                 onChange={(e) => setNewUser({ ...newUser, password: e.target.value })}
                 className="bg-background text-foreground border-border"
+                disabled={isAddingUser}
               />
-              <Select value={newUser.role} onValueChange={(value: User['role']) => setNewUser({ ...newUser, role: value })}>
+              <Select value={newUser.role} onValueChange={(value: User['role']) => setNewUser({ ...newUser, role: value })} disabled={isAddingUser}>
                 <SelectTrigger className="bg-background text-foreground border-border">
                   <SelectValue placeholder="Select Role" />
                 </SelectTrigger>
@@ -103,13 +124,19 @@ const UserManagement = () => {
                 </SelectContent>
               </Select>
             </div>
-            <Button onClick={handleAddUser} className="w-full bg-primary hover:bg-primary/90 text-primary-foreground">
-              <UserPlus className="h-4 w-4 mr-2" /> Add User
+            <Button onClick={handleAddUser} disabled={isAddingUser} className="w-full bg-primary hover:bg-primary/90 text-primary-foreground">
+              {isAddingUser ? <Loader2 className="h-4 w-4 mr-2 animate-spin" /> : <UserPlus className="h-4 w-4 mr-2" />}
+              {isAddingUser ? 'Adding User...' : 'Add User'}
             </Button>
           </div>
 
           <div className="space-y-4">
-            <h3 className="text-xl font-semibold text-foreground">Existing Users</h3>
+            <h3 className="text-xl font-semibold text-foreground flex items-center justify-between">
+              Existing Users
+              <Button onClick={fetchUsers} disabled={isLoading} variant="outline" size="sm">
+                <RefreshCw className={`h-4 w-4 ${isLoading ? 'animate-spin' : ''}`} />
+              </Button>
+            </h3>
             {isLoading ? (
               <div className="space-y-3">
                 {[...Array(3)].map((_, i) => (

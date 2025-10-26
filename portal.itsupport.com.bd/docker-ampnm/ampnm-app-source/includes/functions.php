@@ -243,6 +243,39 @@ function updateNetworkMap($user_id, $map_id, $name) {
     return $stmt->execute([$name, $map_id, $user_id]);
 }
 
+// --- User Management Functions (NEW) ---
+function getAllUsers() {
+    $pdo = getAppDbConnection();
+    $stmt = $pdo->query("SELECT id, username, email, role, created_at FROM `users` ORDER BY created_at DESC");
+    return $stmt->fetchAll(PDO::FETCH_ASSOC);
+}
+
+function addUser($username, $email, $password, $role) {
+    $pdo = getAppDbConnection();
+    $hashed_password = password_hash($password, PASSWORD_DEFAULT);
+    try {
+        $stmt = $pdo->prepare("INSERT INTO `users` (username, email, password, role) VALUES (?, ?, ?, ?)");
+        $stmt->execute([$username, $email, $hashed_password, $role]);
+        return $pdo->lastInsertId();
+    } catch (PDOException $e) {
+        error_log("Error adding user: " . $e->getMessage());
+        return false;
+    }
+}
+
+function updateUserRole($id, $role) {
+    $pdo = getAppDbConnection();
+    $stmt = $pdo->prepare("UPDATE `users` SET role = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?");
+    return $stmt->execute([$role, $id]);
+}
+
+function deleteUser($id) {
+    $pdo = getAppDbConnection();
+    $stmt = $pdo->prepare("DELETE FROM `users` WHERE id = ?");
+    return $stmt->execute([$id]);
+}
+
+
 // --- HTML Header/Footer for the AMPNM app ---
 function app_header($title = "AMPNM") {
     echo '<!DOCTYPE html>
