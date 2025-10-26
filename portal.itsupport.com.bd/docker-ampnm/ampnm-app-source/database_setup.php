@@ -104,7 +104,7 @@ if (isConfiguredAndDbConnects($config_file_path)) {
 }
 
 // Handle POST requests
-if ($_SERVER['REQUEST_METHOD'] === 'POST') {
+if (isset($_SERVER['REQUEST_METHOD']) && $_SERVER['REQUEST_METHOD'] === 'POST') { // Modified line
     if (isset($_POST['action'])) {
         if ($_POST['action'] === 'configure_db' && $step === 1) {
             $db_server = $_POST['db_server'] ?? '';
