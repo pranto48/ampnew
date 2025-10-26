@@ -295,10 +295,7 @@ function app_header($title = "AMPNM") {
                 <nav>
                     <ul class="flex space-x-4">';
     if (isUserLoggedIn()) {
-        echo '<li><a href="dashboard.php" class="text-slate-300 hover:text-cyan-400">Dashboard</a></li>';
-        echo '<li><a href="devices.php" class="text-slate-300 hover:text-cyan-400">Devices</a></li>';
-        echo '<li><a href="ping.php" class="text-slate-300 hover:text-cyan-400">Ping Test</a></li>';
-        echo '<li><a href="network_scanner.php" class="text-slate-300 hover:text-cyan-400">Network Scanner</a></li>';
+        echo '<li><a href="index.html" class="text-slate-300 hover:text-cyan-400">Dashboard</a></li>'; // Link to React app
         echo '<li><a href="logout.php" class="text-slate-300 hover:text-cyan-400">Logout (' . htmlspecialchars($_SESSION['username']) . ')</a></li>';
     } else {
         echo '<li><a href="login.php" class="text-slate-300 hover:text-cyan-400">Login</a></li>';
@@ -319,4 +316,3 @@ function app_footer() {
     </body>
     </html>';
 }
-?>
