@@ -1,400 +1,340 @@
 <?php
-// Database configuration using environment variables for Docker compatibility
-$servername = getenv('DB_HOST') ?: 'db'; // Use DB_HOST env var, fallback to 'db' service name
-$root_username = 'root'; // Setup script needs root privileges to create DB and tables
-$root_password = getenv('MYSQL_ROOT_PASSWORD') ?: '';
-$app_username = getenv('DB_USER') ?: 'user';
-$app_password = getenv('DB_PASSWORD') ?: '';
-$dbname = getenv('DB_NAME') ?: 'network_monitor';
+// This script runs once to set up the database for the AMPNM application.
+// It should be accessed directly only on initial setup.
 
-// Load the main application's config.php for getDbConnection if needed later,
-// but for initial setup, we use direct PDO connection.
-// The functions.php is not needed here as DB connection is direct.
-require_once __DIR__ . '/config.php';
-require_once __DIR__ . '/includes/functions.php'; // Include functions for generateUuid
+// Start session if not already started
+if (session_status() === PHP_SESSION_NONE) {
+    session_start();
+}
 
-function message($text, $is_error = false) {
-    $color = $is_error ? '#ef4444' : '#22c55e';
-    echo "<p style='color: $color; margin: 4px 0; font-family: monospace;'>$text</p>";
+$setup_message = '';
+$config_file_path = __DIR__ . '/config.php';
+
+// Helper function to check if a column exists (needed for migrations)
+function columnExists($pdo, $db, $table, $column) {
+    $stmt = $pdo->prepare("SELECT COUNT(*) FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_SCHEMA = ? AND TABLE_NAME = ? AND COLUMN_NAME = ?");
+    $stmt->execute([$db, $table, $column]);
+    return $stmt->fetchColumn() > 0;
+}
+
+// Function to update config.php with new DB credentials
+function updateConfigFile($db_server, $db_name, $db_username, $db_password, $license_api_url) {
+    global $config_file_path;
+    $content = <<<EOT
+<?php
+// AMPNM Application Database Configuration
+define('APP_DB_SERVER', '{$db_server}');
+define('APP_DB_USERNAME', '{$db_username}');
+define('APP_DB_PASSWORD', '{$db_password}');
+define('APP_DB_NAME', '{$db_name}');
+
+// External License Service API URL
+define('LICENSE_API_URL', '{$license_api_url}');
+
+// Function to create database connection for the AMPNM application
+function getAppDbConnection() {
+    static \$pdo = null;
+
+    if (\$pdo !== null) {
+        try {
+            \$pdo->query("SELECT 1");
+        } catch (PDOException \$e) {
+            if (isset(\$e->errorInfo[1]) && \$e->errorInfo[1] == 2006) {
+                \$pdo = null;
+            } else {
+                throw \$e;
+            }
+        }
+    }
+
+    if (\$pdo === null) {
+        try {
+            \$dsn = "mysql:host=" . APP_DB_SERVER . ";dbname=" . APP_DB_NAME . ";charset=utf8mb4";
+            \$options = [
+                PDO::ATTR_ERRMODE            => PDO::ERRMODE_EXCEPTION,
+                PDO::ATTR_DEFAULT_FETCH_MODE => PDO::FETCH_ASSOC,
+                PDO::ATTR_EMULATE_PREPARES   => false,
+            ];
+            \$pdo = new PDO(\$dsn, APP_DB_USERNAME, APP_DB_PASSWORD, \$options);
+        } catch(PDOException \$e) {
+            die("ERROR: Could not connect to the application database. " . \$e->getMessage());
+        }
+    }
+    
+    return \$pdo;
+}
+EOT;
+    return file_put_contents($config_file_path, $content);
+}
+
+// Helper to check if config is present and valid
+function isConfiguredAndDbConnects($config_file_path) {
+    if (!file_exists($config_file_path)) return false;
+    require_once $config_file_path;
+    if (!defined('APP_DB_SERVER') || !defined('APP_DB_NAME')) return false;
+    try {
+        getAppDbConnection(); // Attempt connection
+        return true;
+    } catch (PDOException $e) {
+        return false;
+    }
+}
+
+// Helper to check if tables exist
+function areTablesSetup($pdo) {
+    $tables_to_check = ['users', 'network_devices', 'ping_history', 'app_settings', 'network_maps']; // Added network_maps
+    foreach ($tables_to_check as $table) {
+        try {
+            $pdo->query("SELECT 1 FROM `$table` LIMIT 1");
+        } catch (PDOException $e) {
+            return false; // Table doesn't exist
+        }
+    }
+    return true;
+}
+
+// Determine current step
+$step = 1;
+if (isConfiguredAndDbConnects($config_file_path)) {
+    require_once $config_file_path; // Ensure config is loaded for getAppDbConnection
+    $pdo = getAppDbConnection();
+    if (areTablesSetup($pdo)) {
+        $step = 2; // All tables exist
+    }
+}
+
+// Handle POST requests
+if ($_SERVER['REQUEST_METHOD'] === 'POST') {
+    if (isset($_POST['action'])) {
+        if ($_POST['action'] === 'configure_db' && $step === 1) {
+            $db_server = $_POST['db_server'] ?? '';
+            $db_name = $_POST['db_name'] ?? '';
+            $db_username = $_POST['db_username'] ?? '';
+            $db_password = $_POST['db_password'] ?? '';
+            $license_api_url = $_POST['license_api_url'] ?? '';
+
+            if (empty($db_server) || empty($db_name) || empty($db_username) || empty($license_api_url)) {
+                $setup_message = '<p class="text-red-500">All database fields and License API URL are required.</p>';
+            } else {
+                try {
+                    // Attempt to connect to MySQL server (without selecting a database)
+                    $pdo_root = new PDO("mysql:host=$db_server", $db_username, $db_password);
+                    $pdo_root->setAttribute(PDO::ATTR_ERRMODE, PDO::ERRMODE_EXCEPTION);
+
+                    // Create database if it doesn't exist
+                    $pdo_root->exec("CREATE DATABASE IF NOT EXISTS `{$db_name}`");
+                    $setup_message .= '<p class="text-green-500">Database ' . htmlspecialchars($db_name) . ' checked/created successfully.</p>';
+
+                    // Update config.php
+                    if (updateConfigFile($db_server, $db_name, $db_username, $db_password, $license_api_url)) {
+                        $setup_message .= '<p class="text-green-500">Configuration saved to config.php.</p>';
+                        $step = 2; // Move to next step
+                        // Reload config to use new settings for subsequent checks
+                        require_once $config_file_path;
+                    } else {
+                        $setup_message .= '<p class="text-red-500">Failed to write to config.php. Check file permissions.</p>';
+                    }
+
+                } catch (PDOException $e) {
+                    $setup_message .= '<p class="text-red-500">Database connection or creation failed: ' . htmlspecialchars($e->getMessage()) . '</p>';
+                }
+            }
+        } elseif ($_POST['action'] === 'setup_tables' && $step === 2) {
+            try {
+                require_once $config_file_path; // Ensure config is loaded
+                $pdo = getAppDbConnection();
+                $db_name = APP_DB_NAME; // Get DB name for migration checks
+
+                // Create users table
+                $pdo->exec("CREATE TABLE IF NOT EXISTS `users` (
+                    `id` INT(11) UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+                    `username` VARCHAR(255) NOT NULL UNIQUE,
+                    `email` VARCHAR(255) NOT NULL UNIQUE,
+                    `password` VARCHAR(255) NOT NULL,
+                    `role` ENUM('admin', 'network_manager', 'read_user') DEFAULT 'read_user',
+                    `created_at` TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    `updated_at` TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
+                ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;");
+                $setup_message .= '<p class="text-green-500">Table `users` checked/created successfully.</p>';
+
+                // Create network_maps table (NEW)
+                $pdo->exec("CREATE TABLE IF NOT EXISTS `network_maps` (
+                    `id` INT(11) UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+                    `user_id` INT(11) UNSIGNED NOT NULL,
+                    `name` VARCHAR(255) NOT NULL,
+                    `created_at` TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    `updated_at` TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+                    FOREIGN KEY (`user_id`) REFERENCES `users`(`id`) ON DELETE CASCADE
+                ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;");
+                $setup_message .= '<p class="text-green-500">Table `network_maps` checked/created successfully.</p>';
+
+                // Create network_devices table (updated to include map_id and position)
+                $pdo->exec("CREATE TABLE IF NOT EXISTS `network_devices` (
+                    `id` INT(11) UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+                    `user_id` INT(11) UNSIGNED NOT NULL,
+                    `name` VARCHAR(255) NOT NULL,
+                    `ip_address` VARCHAR(255) NOT NULL,
+                    `type` VARCHAR(100) DEFAULT 'server',
+                    `description` TEXT,
+                    `status` ENUM('online', 'offline', 'unknown') DEFAULT 'unknown',
+                    `last_ping` TIMESTAMP NULL,
+                    `last_ping_result` TEXT NULL,
+                    `last_ping_output` TEXT NULL,
+                    `map_id` INT(11) UNSIGNED NULL, -- NEW: Foreign key to network_maps
+                    `position_x` DECIMAL(10, 2) DEFAULT 0.00, -- NEW: X position for map
+                    `position_y` DECIMAL(10, 2) DEFAULT 0.00, -- NEW: Y position for map
+                    `created_at` TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    `updated_at` TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+                    FOREIGN KEY (`user_id`) REFERENCES `users`(`id`) ON DELETE CASCADE,
+                    FOREIGN KEY (`map_id`) REFERENCES `network_maps`(`id`) ON DELETE SET NULL
+                ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;");
+                $setup_message .= '<p class="text-green-500">Table `network_devices` checked/created successfully.</p>';
+
+                // Migration: Add map_id, position_x, position_y if they don't exist
+                if (!columnExists($pdo, $db_name, 'network_devices', 'map_id')) {
+                    $pdo->exec("ALTER TABLE `network_devices` ADD COLUMN `map_id` INT(11) UNSIGNED NULL AFTER `last_ping_output`;");
+                    $pdo->exec("ALTER TABLE `network_devices` ADD CONSTRAINT `fk_map_id` FOREIGN KEY (`map_id`) REFERENCES `network_maps`(`id`) ON DELETE SET NULL;");
+                    $setup_message .= '<p class="text-green-500">Migrated `network_devices` table: added `map_id` column and foreign key.</p>';
+                }
+                if (!columnExists($pdo, $db_name, 'network_devices', 'position_x')) {
+                    $pdo->exec("ALTER TABLE `network_devices` ADD COLUMN `position_x` DECIMAL(10, 2) DEFAULT 0.00 AFTER `map_id`;");
+                    $setup_message .= '<p class="text-green-500">Migrated `network_devices` table: added `position_x` column.</p>';
+                }
+                if (!columnExists($pdo, $db_name, 'network_devices', 'position_y')) {
+                    $pdo->exec("ALTER TABLE `network_devices` ADD COLUMN `position_y` DECIMAL(10, 2) DEFAULT 0.00 AFTER `position_x`;");
+                    $setup_message .= '<p class="text-green-500">Migrated `network_devices` table: added `position_y` column.</p>';
+                }
+
+
+                // Create ping_history table
+                $pdo->exec("CREATE TABLE IF NOT EXISTS `ping_history` (
+                    `id` INT(11) UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+                    `device_id` INT(11) UNSIGNED NOT NULL,
+                    `timestamp` TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    `status` ENUM('online', 'offline') NOT NULL,
+                    `latency_ms` INT(11) NULL,
+                    `error_message` TEXT NULL,
+                    FOREIGN KEY (`device_id`) REFERENCES `network_devices`(`id`) ON DELETE CASCADE
+                ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;");
+                $setup_message .= '<p class="text-green-500">Table `ping_history` checked/created successfully.</p>';
+
+                // Create app_settings table
+                $pdo->exec("CREATE TABLE IF NOT EXISTS `app_settings` (
+                    `setting_key` VARCHAR(255) PRIMARY KEY,
+                    `setting_value` TEXT,
+                    `created_at` TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    `updated_at` TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
+                ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;");
+                $setup_message .= '<p class="text-green-500">Table `app_settings` checked/created successfully.</p>';
+
+                // Generate a unique installation ID if not already present
+                $stmt = $pdo->query("SELECT setting_value FROM `app_settings` WHERE setting_key = 'installation_id'");
+                if (!$stmt->fetchColumn()) {
+                    $installation_id = uniqid('ampnm_', true);
+                    $stmt = $pdo->prepare("INSERT INTO `app_settings` (setting_key, setting_value) VALUES ('installation_id', ?)");
+                    $stmt->execute([$installation_id]);
+                    $setup_message .= '<p class="text-green-500">Generated unique installation ID.</p>';
+                }
+
+                $setup_message .= '<p class="text-blue-500">Database setup for AMPNM application completed!</p>';
+                // Redirect to license setup after successful database setup
+                header('Location: license_setup.php');
+                exit;
+
+            } catch (PDOException $e) {
+                $setup_message .= '<p class="text-red-500">Table creation or data insertion failed: ' . htmlspecialchars($e->getMessage()) . '</p>';
+            }
+        }
+    }
 }
 ?>
 <!DOCTYPE html>
 <html lang="en">
 <head>
     <meta charset="UTF-8">
-    <title>Database Setup</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>AMPNM Database Setup</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
     <style>
-        body { background-color: #0f172a; color: #cbd5e1; font-family: sans-serif; padding: 2rem; }
+        body {
+            font-family: sans-serif;
+            background-color: #1a202c;
+            color: #e2e8f0;
+        }
+        .setup-card {
+            background-color: #2d3748;
+            border-radius: 8px;
+            box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
+            padding: 2rem;
+            max-width: 500px;
+            width: 90%;
+        }
+        .form-input {
+            @apply w-full px-3 py-2 bg-gray-700 border border-gray-600 rounded-md text-white placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-blue-500;
+        }
+        .btn-primary {
+            @apply bg-blue-600 text-white font-semibold py-2 px-4 rounded-md hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-blue-500;
+        }
         .loader { border: 4px solid #334155; border-top: 4px solid #22d3ee; border-radius: 50%; width: 24px; height: 24px; animation: spin 1s linear infinite; display: inline-block; margin-right: 10px; vertical-align: middle; }
         @keyframes spin { 0% { transform: rotate(0deg); } 100% { transform: rotate(360deg); } }
     </style>
 </head>
-<body>
-<?php
-try {
-    // Connect to MySQL server (without selecting a database) using root credentials
-    $pdo = new PDO("mysql:host=$servername", $root_username, $root_password);
-    $pdo->setAttribute(PDO::ATTR_ERRMODE, PDO::ERRMODE_EXCEPTION);
+<body class="flex items-center justify-center min-h-screen">
+    <div class="setup-card">
+        <h1 class="text-3xl font-bold text-white mb-6 text-center">AMPNM Database Setup</h1>
+        
+        <div class="mb-6 text-center">
+            <?php if ($step === 1): ?>
+                <span class="inline-block px-4 py-2 rounded-full bg-blue-500 text-white font-semibold">Step 1 of 2: Database Configuration</span>
+            <?php elseif ($step === 2): ?>
+                <span class="inline-block px-4 py-2 rounded-full bg-blue-500 text-white font-semibold">Step 2 of 2: Finalizing Tables</span>
+            <?php endif; ?>
+        </div>
 
-    // Create database if it doesn't exist
-    $pdo->exec("CREATE DATABASE IF NOT EXISTS `$dbname`");
-    message("Database '$dbname' checked/created successfully.");
+        <?php if (!empty($setup_message)): ?>
+            <div class="bg-gray-800 p-4 rounded-lg mb-6 text-sm">
+                <?= $setup_message ?>
+            </div>
+        <?php endif; ?>
 
-    // Reconnect, this time selecting the new database and using the application user credentials
-    $pdo = new PDO("mysql:host=$servername;dbname=$dbname", $app_username, $app_password);
-    $pdo->setAttribute(PDO::ATTR_ERRMODE, PDO::ERRMODE_EXCEPTION);
-
-    // Step 1: Ensure users table exists first with 'role' column
-    // Modified ENUM to include new roles
-    $pdo->exec("CREATE TABLE IF NOT EXISTS `users` (
-        `id` INT(6) UNSIGNED AUTO_INCREMENT PRIMARY KEY,
-        `username` VARCHAR(50) NOT NULL UNIQUE,
-        `password` VARCHAR(255) NOT NULL,
-        `role` ENUM('admin', 'network_manager', 'read_user') DEFAULT 'read_user' NOT NULL,
-        `created_at` TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-    ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;");
-    message("Table 'users' checked/created successfully.");
-
-    // Migration: Update 'role' column if it doesn't exist or if ENUM needs modification
-    // This is a more robust way to handle ENUM changes and existing data
-    $current_enum_values = [];
-    $stmt = $pdo->query("SELECT COLUMN_TYPE FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_SCHEMA = '$dbname' AND TABLE_NAME = 'users' AND COLUMN_NAME = 'role'");
-    $result = $stmt->fetch(PDO::FETCH_ASSOC);
-    if ($result) {
-        preg_match("/^enum\((.*)\)$/", $result['COLUMN_TYPE'], $matches);
-        $current_enum_values = explode(',', str_replace("'", "", $matches[1]));
-    }
-
-    $required_enum_values = ['admin', 'network_manager', 'read_user'];
-    $enum_changed = false;
-    foreach ($required_enum_values as $val) {
-        if (!in_array($val, $current_enum_values)) {
-            $enum_changed = true;
-            break;
-        }
-    }
-    if (count($current_enum_values) !== count($required_enum_values)) {
-        $enum_changed = true;
-    }
-
-    if ($enum_changed) {
-        $pdo->exec("ALTER TABLE `users` MODIFY COLUMN `role` ENUM('admin', 'network_manager', 'read_user') DEFAULT 'read_user' NOT NULL;");
-        message("Migrated 'users' table: updated 'role' ENUM to include new roles.");
-        // Migrate existing 'user' roles to 'read_user'
-        $pdo->exec("UPDATE `users` SET `role` = 'read_user' WHERE `role` = 'user';");
-        message("Migrated existing 'user' roles to 'read_user'.");
-    }
-
-
-    // Step 2: Ensure admin user exists and set password from environment variable
-    $admin_user = 'admin';
-    $admin_password = getenv('ADMIN_PASSWORD') ? getenv('ADMIN_PASSWORD') : 'password';
-    $is_default_password = ($admin_password === 'password');
-
-    $stmt = $pdo->prepare("SELECT id, password FROM `users` WHERE username = ?");
-    $stmt->execute([$admin_user]);
-    $admin_data = $stmt->fetch(PDO::FETCH_ASSOC);
-
-    if (!$admin_data) {
-        $admin_pass_hash = password_hash($admin_password, PASSWORD_DEFAULT);
-        $pdo->prepare("INSERT INTO `users` (username, password, role) VALUES (?, ?, 'admin')")->execute([$admin_user, $admin_pass_hash]);
-        $admin_id = $pdo->lastInsertId();
-        message("Created default user 'admin' with 'admin' role.");
-        if ($is_default_password) {
-            message("WARNING: Admin password is set to the default 'password'. Please change the ADMIN_PASSWORD in docker-compose.yml for security.", true);
-        } else {
-            message("Admin password set securely from environment variable.");
-        }
-    } else {
-        $admin_id = $admin_data['id'];
-        // Update password if it's changed in the env var and doesn't match the current one
-        if (!password_verify($admin_password, $admin_data['password'])) {
-            $new_hash = password_hash($admin_password, PASSWORD_DEFAULT);
-            $updateStmt = $pdo->prepare("UPDATE `users` SET password = ? WHERE id = ?");
-            $updateStmt->execute([$new_hash, $admin_id]);
-            message("Updated admin password from environment variable.");
-        }
-        // Ensure admin user has 'admin' role
-        $stmt = $pdo->prepare("UPDATE `users` SET role = 'admin' WHERE id = ? AND role != 'admin'");
-        $stmt->execute([$admin_id]);
-        if ($stmt->rowCount() > 0) {
-            message("Ensured 'admin' user has 'admin' role.");
-        }
-    }
-
-    // Step 3: Create the rest of the tables
-    $tables = [
-        "CREATE TABLE IF NOT EXISTS `ping_results` (
-            `id` INT(6) UNSIGNED AUTO_INCREMENT PRIMARY KEY,
-            `host` VARCHAR(100) NOT NULL,
-            `packet_loss` INT(3) NOT NULL,
-            `avg_time` DECIMAL(10,2) NOT NULL,
-            `min_time` DECIMAL(10,2) NOT NULL,
-            `max_time` DECIMAL(10,2) NOT NULL,
-            `success` BOOLEAN NOT NULL,
-            `output` TEXT,
-            `created_at` TIMESTAMP DEFAULT CURRENT_TIMESTAMP
-        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;",
-
-        "CREATE TABLE IF NOT EXISTS `maps` (
-            `id` INT(6) UNSIGNED AUTO_INCREMENT PRIMARY KEY,
-            `user_id` INT(6) UNSIGNED NOT NULL,
-            `name` VARCHAR(100) NOT NULL,
-            `type` VARCHAR(50) NOT NULL,
-            `description` TEXT,
-            `background_color` VARCHAR(20) NULL,
-            `background_image_url` VARCHAR(255) NULL,
-            `is_default` BOOLEAN DEFAULT FALSE,
-            `created_at` TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-            `updated_at` TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
-            FOREIGN KEY (`user_id`) REFERENCES `users`(`id`) ON DELETE CASCADE
-        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;",
-
-        "CREATE TABLE IF NOT EXISTS `devices` (
-            `id` INT(6) UNSIGNED AUTO_INCREMENT PRIMARY KEY,
-            `user_id` INT(6) UNSIGNED NOT NULL,
-            `ip` VARCHAR(15) NULL,
-            `check_port` INT(5) NULL,
-            `name` VARCHAR(100) NOT NULL,
-            `status` ENUM('online', 'offline', 'unknown', 'warning', 'critical') DEFAULT 'unknown',
-            `last_seen` TIMESTAMP NULL,
-            `type` VARCHAR(50) NOT NULL DEFAULT 'server',
-            `description` TEXT,
-            `enabled` BOOLEAN DEFAULT TRUE,
-            `x` DECIMAL(10, 4) NULL,
-            `y` DECIMAL(10, 4) NULL,
-            `map_id` INT(6) UNSIGNED,
-            `ping_interval` INT(11) NULL,
-            `icon_size` INT(11) DEFAULT 50,
-            `name_text_size` INT(11) DEFAULT 14,
-            `icon_url` VARCHAR(255) NULL,
-            `warning_latency_threshold` INT(11) NULL,
-            `warning_packetloss_threshold` INT(11) NULL,
-            `critical_latency_threshold` INT(11) NULL,
-            `critical_packetloss_threshold` INT(11) NULL,
-            `last_avg_time` DECIMAL(10, 2) NULL,
-            `last_ttl` INT(11) NULL,
-            `show_live_ping` BOOLEAN DEFAULT FALSE,
-            `created_at` TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-            `updated_at` TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
-            FOREIGN KEY (`user_id`) REFERENCES `users`(`id`) ON DELETE CASCADE,
-            FOREIGN KEY (`map_id`) REFERENCES `maps`(`id`) ON DELETE CASCADE
-        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;",
-
-        "CREATE TABLE IF NOT EXISTS `device_edges` (
-            `id` INT(6) UNSIGNED AUTO_INCREMENT PRIMARY KEY,
-            `user_id` INT(6) UNSIGNED NOT NULL,
-            `source_id` INT(6) UNSIGNED NOT NULL,
-            `target_id` INT(6) UNSIGNED NOT NULL,
-            `map_id` INT(6) UNSIGNED NOT NULL,
-            `connection_type` VARCHAR(50) DEFAULT 'cat5',
-            `created_at` TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-            FOREIGN KEY (`user_id`) REFERENCES `users`(`id`) ON DELETE CASCADE,
-            FOREIGN KEY (`source_id`) REFERENCES `devices`(`id`) ON DELETE CASCADE,
-            FOREIGN KEY (`target_id`) REFERENCES `devices`(`id`) ON DELETE CASCADE,
-            FOREIGN KEY (`map_id`) REFERENCES `maps`(`id`) ON DELETE CASCADE
-        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;",
-
-        "CREATE TABLE IF NOT EXISTS `device_status_logs` (
-            `id` INT(10) UNSIGNED AUTO_INCREMENT PRIMARY KEY,
-            `device_id` INT(6) UNSIGNED NOT NULL,
-            `status` ENUM('online', 'offline', 'unknown', 'warning', 'critical') NOT NULL,
-            `details` VARCHAR(255) NULL,
-            `created_at` TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-            FOREIGN KEY (`device_id`) REFERENCES `devices`(`id`) ON DELETE CASCADE
-        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;",
-
-        // New table for SMTP settings
-        "CREATE TABLE IF NOT EXISTS `smtp_settings` (
-            `id` INT(6) UNSIGNED AUTO_INCREMENT PRIMARY KEY,
-            `user_id` INT(6) UNSIGNED NOT NULL,
-            `host` VARCHAR(255) NOT NULL,
-            `port` INT(5) NOT NULL,
-            `username` VARCHAR(255) NOT NULL,
-            `password` VARCHAR(255) NOT NULL,
-            `encryption` ENUM('none', 'ssl', 'tls') DEFAULT 'tls',
-            `from_email` VARCHAR(255) NOT NULL,
-            `from_name` VARCHAR(255) NULL,
-            `created_at` TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-            `updated_at` TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
-            UNIQUE KEY `user_id_unique` (`user_id`),
-            FOREIGN KEY (`user_id`) REFERENCES `users`(`id`) ON DELETE CASCADE
-        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;",
-
-        // New table for device email subscriptions
-        "CREATE TABLE IF NOT EXISTS `device_email_subscriptions` (
-            `id` INT(6) UNSIGNED AUTO_INCREMENT PRIMARY KEY,
-            `user_id` INT(6) UNSIGNED NOT NULL,
-            `device_id` INT(6) UNSIGNED NOT NULL,
-            `recipient_email` VARCHAR(255) NOT NULL,
-            `notify_on_online` BOOLEAN DEFAULT TRUE,
-            `notify_on_offline` BOOLEAN DEFAULT TRUE,
-            `notify_on_warning` BOOLEAN DEFAULT TRUE,
-            `notify_on_critical` BOOLEAN DEFAULT TRUE,
-            `created_at` TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-            UNIQUE KEY `device_recipient_unique` (`device_id`, `recipient_email`),
-            FOREIGN KEY (`user_id`) REFERENCES `users`(`id`) ON DELETE CASCADE,
-            FOREIGN KEY (`device_id`) REFERENCES `devices`(`id`) ON DELETE CASCADE
-        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;",
-
-        // NEW TABLE: app_settings for storing the application license key and installation ID
-        "CREATE TABLE IF NOT EXISTS `app_settings` (
-            `id` INT(6) UNSIGNED AUTO_INCREMENT PRIMARY KEY,
-            `setting_key` VARCHAR(255) NOT NULL UNIQUE,
-            `setting_value` TEXT NOT NULL,
-            `created_at` TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-            `updated_at` TIMESTAMP DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
-        ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;"
-    ];
-
-    foreach ($tables as $sql) {
-        $pdo->exec($sql);
-        preg_match('/CREATE TABLE IF NOT EXISTS `(\w+)`/', $sql, $matches);
-        $tableName = $matches[1] ? $matches[1] : 'unknown';
-        message("Table '$tableName' checked/created successfully.");
-    }
-
-    // Step 4: Schema migration section to handle upgrades
-    // User ID migrations for existing tables
-    if (!columnExists($pdo, $dbname, 'maps', 'user_id')) {
-        $pdo->exec("ALTER TABLE `maps` ADD COLUMN `user_id` INT(6) UNSIGNED;");
-        $updateStmt = $pdo->prepare("UPDATE `maps` SET user_id = ?");
-        $updateStmt->execute([$admin_id]);
-        $pdo->exec("ALTER TABLE `maps` MODIFY COLUMN `user_id` INT(6) UNSIGNED NOT NULL;");
-        $pdo->exec("ALTER TABLE `maps` ADD CONSTRAINT `fk_maps_user_id` FOREIGN KEY (`user_id`) REFERENCES `users`(`id`) ON DELETE CASCADE;");
-        message("Upgraded 'maps' table: assigned existing maps to admin.");
-    }
-    if (!columnExists($pdo, $dbname, 'devices', 'user_id')) {
-        $pdo->exec("ALTER TABLE `devices` ADD COLUMN `user_id` INT(6) UNSIGNED;");
-        $updateStmt = $pdo->prepare("UPDATE `devices` SET user_id = ?");
-        $updateStmt->execute([$admin_id]);
-        $pdo->exec("ALTER TABLE `devices` MODIFY COLUMN `user_id` INT(6) UNSIGNED NOT NULL;");
-        $pdo->exec("ALTER TABLE `devices` ADD CONSTRAINT `fk_devices_user_id` FOREIGN KEY (`user_id`) REFERENCES `users`(`id`) ON DELETE CASCADE;");
-        message("Upgraded 'devices' table: assigned existing devices to admin.");
-    }
-    if (!columnExists($pdo, $dbname, 'device_edges', 'user_id')) {
-        $pdo->exec("ALTER TABLE `device_edges` ADD COLUMN `user_id` INT(6) UNSIGNED;");
-        $updateStmt = $pdo->prepare("UPDATE `device_edges` SET user_id = ?");
-        $updateStmt->execute([$admin_id]);
-        $pdo->exec("ALTER TABLE `device_edges` MODIFY COLUMN `user_id` INT(6) UNSIGNED NOT NULL;");
-        $pdo->exec("ALTER TABLE `device_edges` ADD CONSTRAINT `fk_device_edges_user_id` FOREIGN KEY (`user_id`) REFERENCES `users`(`id`) ON DELETE CASCADE;");
-        message("Upgraded 'device_edges' table: assigned existing edges to admin.");
-    }
-
-    // Device column migrations
-    if (!columnExists($pdo, $dbname, 'devices', 'check_port')) {
-        $pdo->exec("ALTER TABLE `devices` ADD COLUMN `check_port` INT(5) NULL AFTER `ip`;");
-        message("Upgraded 'devices' table: added 'check_port' column.");
-    }
-    if (!columnExists($pdo, $dbname, 'devices', 'description')) {
-        $pdo->exec("ALTER TABLE `devices` ADD COLUMN `description` TEXT NULL AFTER `type`;");
-        message("Upgraded 'devices' table: added 'description' column.");
-    }
-    if (!columnExists($pdo, $dbname, 'devices', 'ping_interval')) {
-        $pdo->exec("ALTER TABLE `devices` ADD COLUMN `ping_interval` INT(11) NULL AFTER `map_id`;");
-        message("Upgraded 'devices' table: added 'ping_interval' column.");
-    }
-    if (!columnExists($pdo, $dbname, 'devices', 'icon_size')) {
-        $pdo->exec("ALTER TABLE `devices` ADD COLUMN `icon_size` INT(11) DEFAULT 50 AFTER `ping_interval`;");
-        message("Upgraded 'devices' table: added 'icon_size' column.");
-    }
-    if (!columnExists($pdo, $dbname, 'devices', 'name_text_size')) {
-        $pdo->exec("ALTER TABLE `devices` ADD COLUMN `name_text_size` INT(11) DEFAULT 14 AFTER `icon_size`;");
-        message("Upgraded 'devices' table: added 'name_text_size' column.");
-    }
-    if (!columnExists($pdo, $dbname, 'devices', 'icon_url')) {
-        $pdo->exec("ALTER TABLE `devices` ADD COLUMN `icon_url` VARCHAR(255) NULL AFTER `name_text_size`;");
-        message("Upgraded 'devices' table: added 'icon_url' column for custom icons.");
-    }
-    if (!columnExists($pdo, $dbname, 'devices', 'warning_latency_threshold')) {
-        $pdo->exec("ALTER TABLE `devices` ADD COLUMN `warning_latency_threshold` INT(11) NULL AFTER `icon_url`;");
-        message("Upgraded 'devices' table: added 'warning_latency_threshold' column.");
-    }
-    if (!columnExists($pdo, $dbname, 'devices', 'warning_packetloss_threshold')) {
-        $pdo->exec("ALTER TABLE `devices` ADD COLUMN `warning_packetloss_threshold` INT(11) NULL AFTER `warning_latency_threshold`;");
-        message("Upgraded 'devices' table: added 'warning_packetloss_threshold' column.");
-    }
-    if (!columnExists($pdo, $dbname, 'devices', 'critical_latency_threshold')) {
-        $pdo->exec("ALTER TABLE `devices` ADD COLUMN `critical_latency_threshold` INT(11) NULL AFTER `warning_packetloss_threshold`;");
-        message("Upgraded 'devices' table: added 'critical_latency_threshold' column.");
-    }
-    if (!columnExists($pdo, $dbname, 'devices', 'critical_packetloss_threshold')) {
-        $pdo->exec("ALTER TABLE `devices` ADD COLUMN `critical_packetloss_threshold` INT(11) NULL AFTER `critical_latency_threshold`;");
-        message("Upgraded 'devices' table: added 'critical_packetloss_threshold' column.");
-    }
-    if (!columnExists($pdo, $dbname, 'devices', 'last_avg_time')) {
-        $pdo->exec("ALTER TABLE `devices` ADD COLUMN `last_avg_time` DECIMAL(10, 2) NULL AFTER `critical_packetloss_threshold`;");
-        message("Upgraded 'devices' table: added 'last_avg_time' column.");
-    }
-    if (!columnExists($pdo, $dbname, 'devices', 'last_ttl')) {
-        $pdo->exec("ALTER TABLE `devices` ADD COLUMN `last_ttl` INT(11) NULL AFTER `last_avg_time`;");
-        message("Upgraded 'devices' table: added 'last_ttl' column.");
-    }
-    if (!columnExists($pdo, $dbname, 'devices', 'show_live_ping')) {
-        $pdo->exec("ALTER TABLE `devices` ADD COLUMN `show_live_ping` BOOLEAN DEFAULT FALSE AFTER `last_ttl`;");
-        message("Upgraded 'devices' table: added 'show_live_ping' column.");
-    }
-
-    // Map background migrations
-    if (!columnExists($pdo, $dbname, 'maps', 'background_color')) {
-        $pdo->exec("ALTER TABLE `maps` ADD COLUMN `background_color` VARCHAR(20) NULL AFTER `description`;");
-        message("Upgraded 'maps' table: added 'background_color' column.");
-    }
-    if (!columnExists($pdo, $dbname, 'maps', 'background_image_url')) {
-        $pdo->exec("ALTER TABLE `maps` ADD COLUMN `background_image_url` VARCHAR(255) NULL AFTER `background_color`;");
-        message("Upgraded 'maps' table: added 'background_image_url' column.");
-    }
-
-    // Step 5: Check if the admin user has any maps
-    $stmt = $pdo->prepare("SELECT COUNT(*) FROM `maps` WHERE user_id = ?");
-    $stmt->execute([$admin_id]);
-    if ($stmt->fetchColumn() == 0) {
-        $pdo->prepare("INSERT INTO `maps` (user_id, name, type, is_default) VALUES (?, 'Default LAN Map', 'lan', TRUE)")->execute([$admin_id]);
-        message("Created a default map for the admin user.");
-    }
-
-    // Step 6: Generate and store installation_id if not present
-    $existing_installation_id = getInstallationId();
-    if (empty($existing_installation_id)) {
-        $new_installation_id = generateUuid();
-        setInstallationId($new_installation_id);
-        message("Generated and stored new installation ID: " . $new_installation_id);
-    } else {
-        message("Existing installation ID found: " . $existing_installation_id);
-    }
-
-    // Step 7: Indexing for Performance
-    message("Applying database indexes for performance...");
-    $indexes = [
-        'ping_results' => ['idx_host_created_at' => '(`host`, `created_at` DESC)'],
-        'devices' => [
-            'idx_ip' => '(`ip`)',
-            'idx_map_id' => '(`map_id`)',
-            'idx_user_id' => '(`user_id`)'
-        ],
-        'device_status_logs' => ['idx_device_created' => '(`device_id`, `created_at` DESC)']
-    ];
-
-    foreach ($indexes as $table => $indexList) {
-        foreach ($indexList as $indexName => $columns) {
-            if (!indexExists($pdo, $dbname, $table, $indexName)) {
-                $pdo->exec("CREATE INDEX `$indexName` ON `$table` $columns;");
-                message("Created index '$indexName' on table '$table'.");
-            } else {
-                message("Index '$indexName' on table '$table' already exists.");
-            }
-        }
-    }
-
-    echo "<h2 style='color: #06b6d4; font-family: sans-serif;'>Database setup completed successfully!</h2>";
-    echo "<p style='color: #94a3b8;'><span class='loader'></span>Redirecting to license setup in 3 seconds...</p>"; // Changed redirect
-    echo '<meta http-equiv="refresh" content="3;url=license_setup.php">'; // Redirect to license setup
-    
-} catch (PDOException $e) {
-    message("Database setup failed: " . $e->getMessage(), true);
-    exit(1);
-}
-?>
-    <a href="index.php" style="color: #22d3ee; text-decoration: none; font-size: 1.2rem;">&larr; Go to Dashboard</a>
+        <?php if ($step === 1): ?>
+            <form method="POST" class="space-y-4">
+                <input type="hidden" name="action" value="configure_db">
+                <div>
+                    <label for="db_server" class="block text-gray-300 text-sm font-bold mb-2">Database Host:</label>
+                    <input type="text" id="db_server" name="db_server" class="form-input" value="<?= htmlspecialchars($_POST['db_server'] ?? 'db') ?>" required>
+                </div>
+                <div>
+                    <label for="db_name" class="block text-gray-300 text-sm font-bold mb-2">Database Name:</label>
+                    <input type="text" id="db_name" name="db_name" class="form-input" value="<?= htmlspecialchars($_POST['db_name'] ?? 'network_monitor') ?>" required>
+                </div>
+                <div>
+                    <label for="db_username" class="block text-gray-300 text-sm font-bold mb-2">Database Username:</label>
+                    <input type="text" id="db_username" name="db_username" class="form-input" value="<?= htmlspecialchars($_POST['db_username'] ?? 'user') ?>" required>
+                </div>
+                <div>
+                    <label for="db_password" class="block text-gray-300 text-sm font-bold mb-2">Database Password:</label>
+                    <input type="password" id="db_password" name="db_password" class="form-input" value="<?= htmlspecialchars($_POST['db_password'] ?? 'password') ?>">
+                </div>
+                <div>
+                    <label for="license_api_url" class="block text-gray-300 text-sm font-bold mb-2">License Portal API URL:</label>
+                    <input type="url" id="license_api_url" name="license_api_url" class="form-input" value="<?= htmlspecialchars($_POST['license_api_url'] ?? 'https://portal.itsupport.com.bd/verify_license.php') ?>" required>
+                    <p class="text-xs text-gray-400 mt-1">This is the URL of your external license verification service.</p>
+                </div>
+                <button type="submit" class="btn-primary w-full">
+                    <i class="fas fa-database mr-2"></i>Configure Database
+                </button>
+            </form>
+        <?php elseif ($step === 2): ?>
+            <form method="POST" class="space-y-4">
+                <input type="hidden" name="action" value="setup_tables">
+                <p class="text-gray-200 mb-4">Click "Finalize Installation" to create all necessary tables for AMPNM.</p>
+                <button type="submit" class="btn-primary w-full">
+                    <i class="fas fa-check-circle mr-2"></i>Finalize Installation
+                </button>
+            </form>
+        <?php endif; ?>
+    </div>
 </body>
 </html>

@@ -31,8 +31,8 @@ import NetworkScanner from "@/components/NetworkScanner";
 import ServerPingTest from "@/components/ServerPingTest";
 import PingHistory from "@/components/PingHistory";
 import { MadeWithDyad } from "@/components/made-with-dyad";
-import NetworkMap from "@/components/NetworkMap";
-import { getLicenseStatus, LicenseStatus, User, addDevice, NetworkDevice } from "@/services/networkDeviceService";
+import NetworkMap from "@/components/NetworkMap"; // Corrected import path
+import { getLicenseStatus, LicenseStatus, User, addDevice, NetworkDevice, getUserInfo } from "@/services/networkDeviceService"; // To get initial license status
 import { Skeleton } from "@/components/ui/skeleton";
 import DashboardContent from "@/components/DashboardContent";
 import { useDashboardData } from "@/hooks/useDashboardData";
@@ -112,16 +112,11 @@ const MainApp = () => {
   const fetchUserRole = useCallback(async () => {
     setIsUserRoleLoading(true);
     try {
-      const response = await fetch('/api.php?action=get_user_info'); 
-      if (response.ok) {
-        const data = await response.json();
-        setUserRole(data.role);
-      } else {
-        setUserRole('read_user'); // Fallback to read_user if API fails
-      }
+      const data = await getUserInfo(); 
+      setUserRole(data.role);
     } catch (error) {
       console.error("Failed to fetch user role:", error);
-      setUserRole('read_user'); 
+      setUserRole('read_user'); // Fallback to read_user if API fails
     } finally {
       setIsUserRoleLoading(false);
     }
@@ -405,23 +400,15 @@ const MainApp = () => {
                 <RefreshCw className="h-4 w-4" />
               </Button>
             </div>
-            {currentMapId ? (
-              <NetworkMap 
-                devices={devices} 
-                onMapUpdate={fetchDashboardData}
-                mapId={currentMapId} 
-                canAddDevice={licenseStatus.can_add_device}
-                licenseMessage={licenseStatus.license_message}
-                userRole={userRole}
-              />
-            ) : (
-              <Card className="h-[70vh] flex items-center justify-center">
-                <CardContent className="text-center">
-                  <Network className="h-12 w-12 text-muted-foreground mx-auto mb-4" />
-                  <p className="text-muted-foreground">No map selected or available. Please create one in the PHP frontend or select an existing one.</p>
-                </CardContent>
-              </Card>
-            )}
+            {/* Render NetworkMap component */}
+            <NetworkMap 
+              devices={devices} 
+              onMapUpdate={fetchDashboardData}
+              mapId={currentMapId} 
+              canAddDevice={licenseStatus.can_add_device}
+              licenseMessage={licenseStatus.license_message}
+              userRole={userRole}
+            />
           </TabsContent>
 
           <TabsContent value="license">

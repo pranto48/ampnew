@@ -1,7 +1,7 @@
 <?php
-session_start();
-session_unset();
-session_destroy();
+require_once 'includes/bootstrap.php';
+
+logoutUser();
 header('Location: login.php');
 exit;
 ?>

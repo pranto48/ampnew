@@ -1,7 +1,7 @@
 <?php
-require_once __DIR__ . '/includes/auth_check.php'; // Ensure session and auth are checked
+require_once 'includes/bootstrap.php';
 
-// Redirect to dashboard as the main entry point for the PHP application
-header('Location: dashboard.php');
+// Redirect to the React app's index.html
+header('Location: index.html');
 exit;
 ?>
