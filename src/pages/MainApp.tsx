@@ -47,6 +47,7 @@ import { Badge } from "@/components/ui/badge"; // Ensure Badge is imported
 import { DeviceEditorDialog } from "@/components/DeviceEditorDialog"; // Import DeviceEditorDialog
 import { showSuccess, showError } from "@/utils/toast"; // Import toast utilities
 import LicenseDetailsPage from "./LicenseDetailsPage"; // Import the new LicenseDetailsPage
+import DeviceList from "@/components/DeviceList"; // Import the new DeviceList component
 
 // Helper to get initial tab from URL hash
 const getInitialTab = () => {
@@ -87,10 +88,6 @@ const MainApp = () => {
   const [isUserRoleLoading, setIsUserRoleLoading] = useState(true);
   const [isLicenseStatusLoading, setIsLicenseStatusLoading] = useState(true);
   const [activeTab, setActiveTab] = useState(getInitialTab());
-
-  // State for DeviceEditorDialog
-  const [isDeviceEditorOpen, setIsDeviceEditorOpen] = useState(false);
-  const [editingDevice, setEditingDevice] = useState<Partial<NetworkDevice> | undefined>(undefined);
 
   const fetchLicenseStatus = useCallback(async () => {
     setIsLicenseStatusLoading(true);
@@ -162,26 +159,6 @@ const MainApp = () => {
     console.log("  Can Add Device:", licenseStatus.can_add_device);
     console.log("  License Message:", licenseStatus.license_message);
   }, [userRole, licenseStatus]);
-
-  const handleAddDeviceClick = () => {
-    if (!licenseStatus.can_add_device) {
-      showError(licenseStatus.license_message || 'You have reached your device limit.');
-      return;
-    }
-    setEditingDevice(undefined); // Clear any previous editing state
-    setIsDeviceEditorOpen(true);
-  };
-
-  const handleSaveNewDevice = async (deviceData: Omit<NetworkDevice, 'id' | 'user_id' | 'position_x' | 'position_y' | 'status' | 'last_ping' | 'last_ping_result' | 'map_name' | 'last_ping_output'>) => {
-    try {
-      await addDevice({ ...deviceData, position_x: 0, position_y: 0, map_id: currentMapId }); // Default position and map_id
-      showSuccess('Device added successfully.');
-      fetchDashboardData(); // Refresh the device list
-      fetchLicenseStatus(); // Re-fetch license status to update device count
-    } catch (error: any) {
-      showError(error.message || 'Failed to add device.');
-    }
-  };
 
   if (isAppLoading) {
     return (
@@ -276,85 +253,15 @@ const MainApp = () => {
           </TabsContent>
 
           <TabsContent value="devices">
-            <Card>
-              <CardHeader className="flex flex-row items-center justify-between">
-                <div>
-                  <CardTitle>Local Network Devices</CardTitle>
-                  <CardDescription>Monitor the status of devices on your local network</CardDescription>
-                </div>
-                {canManageDevices && (
-                  <div className="flex flex-col items-end gap-2">
-                    {!licenseStatus.can_add_device && (
-                      <Badge variant="destructive" className="text-xs">
-                        <AlertCircle className="h-3 w-3 mr-1" />
-                        {licenseStatus.license_message || 'Device limit reached.'}
-                      </Badge>
-                    )}
-                    <Button 
-                      onClick={handleAddDeviceClick} 
-                      disabled={!licenseStatus.can_add_device}
-                      title={!licenseStatus.can_add_device ? licenseStatus.license_message : 'Add a new device to your inventory'}
-                      className="bg-primary hover:bg-primary/90 text-primary-foreground"
-                    >
-                      <PlusCircle className="mr-2 h-4 w-4" />
-                      Create New Device
-                    </Button>
-                  </div>
-                )}
-              </CardHeader>
-              <CardContent>
-                {isDashboardLoading ? (
-                  <div className="space-y-4">
-                    {[...Array(5)].map((_, i) => (
-                      <Skeleton key={i} className="h-16 w-full rounded-lg" />
-                    ))}
-                  </div>
-                ) : devices.length === 0 ? (
-                  <div className="text-center py-8 text-muted-foreground">
-                    <Server className="h-12 w-12 mx-auto mb-4" />
-                    <p>No devices found. Add devices to start monitoring.</p>
-                  </div>
-                ) : (
-                  <div className="space-y-4">
-                    {devices.map((device) => (
-                      <div
-                        key={device.id}
-                        className="flex items-center justify-between p-4 border rounded-lg transition-colors hover:bg-muted"
-                      >
-                        <div className="flex items-center gap-3">
-                          {device.status === "online" ? (
-                            <Wifi className="h-5 w-5 text-green-500" />
-                          ) : device.status === "offline" ? (
-                            <WifiOff className="h-5 w-5 text-red-500" />
-                          ) : (
-                            <Wifi className="h-5 w-5 text-gray-500" />
-                          )}
-                          <div>
-                            <span className="font-medium">{device.name}</span>
-                            <p className="text-sm text-muted-foreground">{device.ip_address}</p>
-                          </div>
-                        </div>
-                        <div className="flex items-center gap-4">
-                          {device.last_ping && (
-                            <div className="text-xs text-muted-foreground">
-                              Last ping: {new Date(device.last_ping).toLocaleTimeString()}
-                            </div>
-                          )}
-                          <Badge
-                            variant={
-                              device.status === "online" ? "default" :
-                              device.status === "offline" ? "destructive" : "secondary"
-                            }
-                          >
-                            {device.status || 'unknown'}
-                          </Badge>
-                        </div>
-                      </div>
-                    ))}
-                  </div>
-                )}
-              </CardContent>
-            </Card>
+            <DeviceList
+              devices={devices}
+              isLoading={isDashboardLoading}
+              canManageDevices={canManageDevices}
+              licenseStatus={licenseStatus}
+              fetchDevices={fetchDashboardData} // Pass fetchDashboardData to refresh devices
+              fetchLicenseStatus={fetchLicenseStatus}
+              currentMapId={currentMapId}
+            />
           </TabsContent>
 
           <TabsContent value="ping">
@@ -436,14 +343,6 @@ const MainApp = () => {
 
         <MadeWithDyad />
       </div>
-
-      {/* Device Editor Dialog */}
-      <DeviceEditorDialog
-        isOpen={isDeviceEditorOpen}
-        onClose={() => setIsDeviceEditorOpen(false)}
-        onSave={handleSaveNewDevice}
-        device={editingDevice} // Will be undefined for new device
-      />
     </div>
   );
 };
