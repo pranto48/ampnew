@@ -185,6 +185,23 @@ switch ($action) {
         }
         break;
 
+    case 'delete_device':
+        if ($_SERVER['REQUEST_METHOD'] === 'POST') {
+            $device_id = trim($input['id'] ?? '');
+            if (empty($device_id)) {
+                http_response_code(400);
+                echo json_encode(['success' => false, 'error' => 'Device ID is required.']);
+                exit;
+            }
+            if (deleteNetworkDevice($user_id, $device_id)) {
+                echo json_encode(['success' => true, 'message' => 'Device deleted successfully.']);
+            } else {
+                http_response_code(500);
+                echo json_encode(['success' => false, 'error' => 'Failed to delete device.']);
+            }
+        }
+        break;
+
     // --- Network Map Management ---
     case 'get_maps':
         $maps = getNetworkMaps($user_id);
@@ -225,6 +242,23 @@ switch ($action) {
             } else {
                 http_response_code(500);
                 echo json_encode(['success' => false, 'error' => 'Failed to update map.']);
+            }
+        }
+        break;
+
+    case 'delete_map':
+        if ($_SERVER['REQUEST_METHOD'] === 'POST') {
+            $map_id = trim($input['id'] ?? '');
+            if (empty($map_id)) {
+                http_response_code(400);
+                echo json_encode(['success' => false, 'error' => 'Map ID is required.']);
+                exit;
+            }
+            if (deleteNetworkMap($user_id, $map_id)) {
+                echo json_encode(['success' => true, 'message' => 'Map deleted successfully.']);
+            } else {
+                http_response_code(500);
+                echo json_encode(['success' => false, 'error' => 'Failed to delete map.']);
             }
         }
         break;

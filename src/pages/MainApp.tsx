@@ -408,6 +408,8 @@ const MainApp = () => {
               canAddDevice={licenseStatus.can_add_device}
               licenseMessage={licenseStatus.license_message}
               userRole={userRole}
+              maps={maps} // Pass maps to NetworkMap for deletion
+              setCurrentMapId={setCurrentMapId} // Pass setter for map selection
             />
           </TabsContent>
 

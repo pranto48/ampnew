@@ -102,6 +102,13 @@ export const updateDevicePosition = async (updates: Array<{ id: string; position
   }
 };
 
+export const deleteDevice = async (id: string): Promise<void> => {
+  const data = await callApi('delete_device', 'POST', undefined, { id });
+  if (!data.success) {
+    throw new Error(data.error || "Failed to delete device.");
+  }
+};
+
 // --- Network Map Functions ---
 export const getMaps = async (): Promise<NetworkMap[]> => {
   const data = await callApi('get_maps', 'GET');
@@ -134,6 +141,13 @@ export const updateMap = async (mapId: string, name: string): Promise<NetworkMap
     } as NetworkMap;
   }
   throw new Error(data.error || "Failed to update map.");
+};
+
+export const deleteMap = async (id: string): Promise<void> => {
+  const data = await callApi('delete_map', 'POST', undefined, { id });
+  if (!data.success) {
+    throw new Error(data.error || "Failed to delete map.");
+  }
 };
 
 // --- License Status Functions ---

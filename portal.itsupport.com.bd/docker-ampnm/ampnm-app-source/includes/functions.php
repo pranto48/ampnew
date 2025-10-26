@@ -213,6 +213,26 @@ function updateNetworkDevice($user_id, $device_id, $name, $ip_address, $type, $d
     return $stmt->execute([$name, $ip_address, $type, $description, $map_id, $position_x, $position_y, $device_id, $user_id]);
 }
 
+function deleteNetworkDevice($user_id, $device_id) {
+    $pdo = getAppDbConnection();
+    $pdo->beginTransaction();
+    try {
+        // Delete associated ping history first
+        $stmt_history = $pdo->prepare("DELETE FROM `ping_history` WHERE device_id = ?");
+        $stmt_history->execute([$device_id]);
+
+        // Then delete the device
+        $stmt_device = $pdo->prepare("DELETE FROM `network_devices` WHERE id = ? AND user_id = ?");
+        $result = $stmt_device->execute([$device_id, $user_id]);
+        $pdo->commit();
+        return $result;
+    } catch (PDOException $e) {
+        $pdo->rollBack();
+        error_log("Error deleting network device: " . $e->getMessage());
+        return false;
+    }
+}
+
 // --- Network Map Functions ---
 function getNetworkMaps($user_id) {
     $pdo = getAppDbConnection();
@@ -241,6 +261,26 @@ function updateNetworkMap($user_id, $map_id, $name) {
     $pdo = getAppDbConnection();
     $stmt = $pdo->prepare("UPDATE `network_maps` SET name = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ? AND user_id = ?");
     return $stmt->execute([$name, $map_id, $user_id]);
+}
+
+function deleteNetworkMap($user_id, $map_id) {
+    $pdo = getAppDbConnection();
+    $pdo->beginTransaction();
+    try {
+        // Set map_id to NULL for all devices associated with this map
+        $stmt_devices = $pdo->prepare("UPDATE `network_devices` SET map_id = NULL WHERE map_id = ? AND user_id = ?");
+        $stmt_devices->execute([$map_id, $user_id]);
+
+        // Then delete the map
+        $stmt_map = $pdo->prepare("DELETE FROM `network_maps` WHERE id = ? AND user_id = ?");
+        $result = $stmt_map->execute([$map_id, $user_id]);
+        $pdo->commit();
+        return $result;
+    } catch (PDOException $e) {
+        $pdo->rollBack();
+        error_log("Error deleting network map: " . $e->getMessage());
+        return false;
+    }
 }
 
 // --- User Management Functions (NEW) ---
